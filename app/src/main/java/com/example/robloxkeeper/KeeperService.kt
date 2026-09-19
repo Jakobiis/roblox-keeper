@@ -80,8 +80,12 @@ class KeeperService : Service() {
                         lastNotForeground = false
                     } else {
                         if (lastNotForeground) {
-                            openDeeplink()
-                            lastNotForeground = false
+                            if (openDeeplink()) {
+                                lastNotForeground = false
+                            }
+                            // else: leave it true so the very next tick
+                            // retries immediately once suppression lifts,
+                            // instead of needing two fresh checks again.
                         } else {
                             lastNotForeground = true
                         }
@@ -293,19 +297,17 @@ class KeeperService : Service() {
 
                     if (secondsAgo >= 150) {
                         logEvent("Heartbeat stale (${minutes}m ${seconds}s) — relaunching and killing Roblox")
-                        handler.post {
-                            killRoblox()
-                            lastNotForeground = false
-                        }
-                        handler.postDelayed({ openDeeplink() }, 2000)
+                        handler.post { killRoblox() }
+                        handler.postDelayed({
+                            if (openDeeplink()) lastNotForeground = false
+                        }, 2000)
                     } else Unit
                 } else {
                     logEvent("Heartbeat: bot ID $botId not found — relaunching")
-                    handler.post {
-                        killRoblox()
-                        lastNotForeground = false
-                    }
-                    handler.postDelayed({ openDeeplink() }, 2000)
+                    handler.post { killRoblox() }
+                    handler.postDelayed({
+                        if (openDeeplink()) lastNotForeground = false
+                    }, 2000)
                 }
             }
         } catch (e: Exception) {
@@ -366,22 +368,35 @@ class KeeperService : Service() {
         return isForegroundApp(FIREFOX_PACKAGE)
     }
 
-    private fun openDeeplink() {
+    // Returns true only if a relaunch was actually attempted, so callers can
+    // tell a real attempt apart from one that got suppressed — otherwise a
+    // suppressed attempt would look identical to a successful one and reset
+    // tracking state that should instead be left alone to retry immediately
+    // once the suppression lifts.
+    private var loggedRelaunchSuppressed = false
+
+    private fun openDeeplink(): Boolean {
         if (System.currentTimeMillis() < suppressLegacyRelaunchUntil) {
             logEvent("Skipped legacy relaunch: Main World hop in flight")
-            return
+            return false
         }
         if (isRelaunchSuppressed()) {
-            logEvent("Skipped legacy relaunch: paused / Firefox is open")
-            return
+            if (!loggedRelaunchSuppressed) {
+                logEvent("Skipped legacy relaunch: paused / Firefox is open")
+                loggedRelaunchSuppressed = true
+            }
+            return false
         }
-        try {
+        loggedRelaunchSuppressed = false
+        return try {
             Runtime.getRuntime().exec(arrayOf("su", "-c", "am start -a android.intent.action.VIEW -d \"$DEEPLINK\""))
             Log.d(TAG, "Launched deeplink via am start")
             logEvent("Relaunch triggered: $DEEPLINK")
+            true
         } catch (e: Exception) {
             Log.e(TAG, "Failed to open deeplink", e)
             logEvent("Relaunch failed: ${e.message ?: "unknown error"}")
+            false
         }
     }
 
@@ -396,8 +411,7 @@ class KeeperService : Service() {
                     if (l.contains(TARGET_PACKAGE) && (l.contains("died") || l.contains("crash"))) {
                         logEvent("Logcat: Roblox crash detected — relaunching")
                         handler.post {
-                            openDeeplink()
-                            lastNotForeground = false
+                            if (openDeeplink()) lastNotForeground = false
                         }
                     }
                 }
