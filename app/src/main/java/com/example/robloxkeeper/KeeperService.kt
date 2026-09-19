@@ -55,12 +55,13 @@ class KeeperService : Service() {
     private val handler = Handler(Looper.getMainLooper())
     private var lastNotForeground = false
     private var hasBeenForeground = false
-    private var botId: String = "10811982647"
+    private var botId: String = ""
     private var logcatThread: Thread? = null
 
     private val timerTask = object : Runnable {
         override fun run() {
             Thread {
+                refreshBotId()
                 val isRobloxForeground = isForegroundApp(TARGET_PACKAGE)
                 handler.post {
                     Log.d(TAG, "Is Roblox in foreground? $isRobloxForeground")
@@ -166,24 +167,37 @@ class KeeperService : Service() {
         }
     }
 
+    // Re-reads BotId.txt and updates the cached botId if it changed (e.g. the
+    // account on this phone was swapped). Without this, botId would only ever
+    // be read once at service startup and silently go stale until Keeper was
+    // manually restarted.
+    private fun refreshBotId() {
+        try {
+            val file = File(
+                Environment.getExternalStorageDirectory(),
+                "Delta/Workspace/BotId.txt"
+            )
+            val newId = file.readText().trim()
+            if (newId.isBlank()) return
+            if (newId != botId) {
+                val previous = botId
+                botId = newId
+                logEvent(if (previous.isBlank()) "Bot ID loaded: $newId" else "Bot ID changed: $previous -> $newId")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to read BotId.txt", e)
+            if (botId.isBlank()) {
+                logEvent("ERROR: Could not read BotId.txt — ${e.message}")
+            }
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         isRunning = true
         startForeground(NOTIFICATION_ID, createNotification())
 
-        // Safely read the bot ID file here instead of in companion object
-        botId = try {
-            val file = File(
-                Environment.getExternalStorageDirectory(),
-                "Delta/Workspace/BotId.txt"
-            )
-            file.readText().trim()
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to read BotId.txt", e)
-            logEvent("ERROR: Could not read BotId.txt — ${e.message}")
-            ""
-        }
-
+        refreshBotId()
         logEvent("Service started, bot ID: $botId")
         handler.post(timerTask)
         handler.post(heartbeatTask)
