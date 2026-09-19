@@ -96,6 +96,64 @@ class KeeperService : Service() {
         }
     }
 
+    // Polls for a Main World hop request written by MainBotCode.luau's
+    // Rejoin()/writeMainJoinRequest (BOT_HOP_METHOD == 2 only). Runs
+    // independently of foreground detection, since the deep link hot-routes
+    // an already-running Roblox client straight into the target instance —
+    // no force-stop/relaunch needed.
+    private var lastMainJoinRequestRaw: String? = null
+    @Volatile private var suppressLegacyRelaunchUntil: Long = 0L
+    private val MAIN_HOP_SUPPRESSION_MS = 15000L
+
+    private val mainJoinTask = object : Runnable {
+        override fun run() {
+            Thread { checkMainJoinRequest() }.start()
+            handler.postDelayed(this, CHECK_INTERVAL)
+        }
+    }
+
+    private fun checkMainJoinRequest() {
+        if (botId.isBlank()) return
+        try {
+            val file = File(
+                Environment.getExternalStorageDirectory(),
+                "Delta/Workspace/mainJoinRequest$botId.json"
+            )
+            if (!file.exists()) return
+
+            val raw = file.readText().trim()
+            if (raw.isBlank() || raw == lastMainJoinRequestRaw) return
+            lastMainJoinRequestRaw = raw
+
+            val json = JSONObject(raw)
+            val placeId = json.optLong("placeId", 606849621L)
+            val jobId = if (json.isNull("jobId")) null else json.optString("jobId", "").ifBlank { null }
+
+            val url = if (jobId != null) {
+                "roblox://experiences/start?placeId=$placeId&gameInstanceId=$jobId"
+            } else {
+                "roblox://experiences/start?placeId=$placeId"
+            }
+
+            logEvent("Main World hop requested: $url")
+            // Give the legacy foreground/heartbeat/crash triggers a window to
+            // back off, so they can't fire the static share-link relaunch
+            // while this hop is in flight.
+            suppressLegacyRelaunchUntil = System.currentTimeMillis() + MAIN_HOP_SUPPRESSION_MS
+
+            val cmd = "am start -W -a android.intent.action.VIEW -d \"$url\" $TARGET_PACKAGE"
+            val process = Runtime.getRuntime().exec(arrayOf("su", "-c", cmd))
+            val output = process.inputStream.bufferedReader().readText().trim()
+            val errorOutput = process.errorStream.bufferedReader().readText().trim()
+            process.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)
+
+            logEvent("Main World hop result: $output" + if (errorOutput.isNotBlank()) " | ERR: $errorOutput" else "")
+        } catch (e: Exception) {
+            Log.e(TAG, "Main join check failed", e)
+            logEvent("Main World hop error: ${e.message ?: "unknown"}")
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         isRunning = true
@@ -117,6 +175,7 @@ class KeeperService : Service() {
         logEvent("Service started, bot ID: $botId")
         handler.post(timerTask)
         handler.post(heartbeatTask)
+        handler.post(mainJoinTask)
         startLogcatMonitor()
     }
 
@@ -125,6 +184,7 @@ class KeeperService : Service() {
         isRunning = false
         handler.removeCallbacks(timerTask)
         handler.removeCallbacks(heartbeatTask)
+        handler.removeCallbacks(mainJoinTask)
         logcatThread?.interrupt()
         clearSavedLogs(this)
         Log.d(TAG, "Service stopped and logs cleared")
@@ -252,6 +312,10 @@ class KeeperService : Service() {
     }
 
     private fun openDeeplink() {
+        if (System.currentTimeMillis() < suppressLegacyRelaunchUntil) {
+            logEvent("Skipped legacy relaunch: Main World hop in flight")
+            return
+        }
         try {
             Runtime.getRuntime().exec(arrayOf("su", "-c", "am start -a android.intent.action.VIEW -d \"$DEEPLINK\""))
             Log.d(TAG, "Launched deeplink via am start")
