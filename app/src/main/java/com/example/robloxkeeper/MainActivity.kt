@@ -17,8 +17,10 @@ import com.google.android.material.switchmaterial.SwitchMaterial
 class MainActivity : AppCompatActivity() {
 
     private lateinit var toggleSwitch: SwitchMaterial
+    private lateinit var pauseSwitch: SwitchMaterial
     private lateinit var logsView: TextView
     private lateinit var serviceStatusLabel: TextView
+    private lateinit var pauseStatusLabel: TextView
     private lateinit var copyLogsButton: MaterialButton
     private lateinit var clearLogsButton: MaterialButton
     private val logsReceiver = object : android.content.BroadcastReceiver() {
@@ -34,8 +36,10 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         toggleSwitch = findViewById(R.id.toggle_switch)
+        pauseSwitch = findViewById(R.id.pause_switch)
         logsView = findViewById(R.id.logs_view)
         serviceStatusLabel = findViewById(R.id.service_status_label)
+        pauseStatusLabel = findViewById(R.id.pause_status_label)
         copyLogsButton = findViewById(R.id.copy_logs_button)
         clearLogsButton = findViewById(R.id.clear_logs_button)
 
@@ -52,6 +56,15 @@ class MainActivity : AppCompatActivity() {
                 stopService(Intent(this, KeeperService::class.java))
                 serviceStatusLabel.text = "Inactive"
                 serviceStatusLabel.setTextColor(0xFF888888.toInt())
+            }
+        }
+
+        pauseSwitch.setOnCheckedChangeListener { _, isChecked ->
+            KeeperService.isManuallyPaused = isChecked
+            pauseStatusLabel.text = if (isChecked) {
+                "Paused — relaunching is on hold"
+            } else {
+                "Not paused (auto-pauses while Firefox is open)"
             }
         }
 
@@ -74,6 +87,7 @@ class MainActivity : AppCompatActivity() {
             serviceStatusLabel.text = "Active"
             serviceStatusLabel.setTextColor(0xFF4CAF50.toInt())
         }
+        pauseSwitch.isChecked = KeeperService.isManuallyPaused
         renderLogs()
     }
 

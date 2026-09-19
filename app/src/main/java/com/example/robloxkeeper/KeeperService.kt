@@ -20,11 +20,13 @@ class KeeperService : Service() {
 
     companion object {
         var isRunning = false
+        @Volatile var isManuallyPaused = false
         val client = OkHttpClient()
         private const val NOTIFICATION_ID = 1
         private const val CHANNEL_ID = "keeper_channel"
         private const val TAG = "KeeperService"
         private const val TARGET_PACKAGE = "com.roblox.client"
+        private const val FIREFOX_PACKAGE = "org.mozilla.firefox"
         private const val DEEPLINK = "https://www.roblox.com/share?code=c00bc130c108844d800e144db1ed8352&type=Server"
         private const val CHECK_URL = "https://inventories.jailbreakchangelogs.com/bots/connected"
         private const val CHECK_INTERVAL = 10000L
@@ -103,6 +105,7 @@ class KeeperService : Service() {
     // an already-running Roblox client straight into the target instance —
     // no force-stop/relaunch needed.
     private var lastMainJoinRequestRaw: String? = null
+    private var lastDeferredJoinRequestRaw: String? = null
     @Volatile private var suppressLegacyRelaunchUntil: Long = 0L
     private val MAIN_HOP_SUPPRESSION_MS = 15000L
     private val MAIN_JOIN_REQUEST_MAX_AGE_S = 60L
@@ -124,7 +127,21 @@ class KeeperService : Service() {
             if (!file.exists()) return
 
             val raw = file.readText().trim()
-            if (raw.isBlank() || raw == lastMainJoinRequestRaw) return
+            if (raw.isBlank()) return
+
+            if (isRelaunchSuppressed()) {
+                // Don't mark it as seen: once un-paused/Firefox closes, this
+                // same request should still get a chance to fire (subject to
+                // its own staleness check) instead of being silently dropped.
+                if (raw != lastDeferredJoinRequestRaw) {
+                    logEvent("Main World hop deferred: paused / Firefox is open")
+                    lastDeferredJoinRequestRaw = raw
+                }
+                return
+            }
+            lastDeferredJoinRequestRaw = null
+
+            if (raw == lastMainJoinRequestRaw) return
             lastMainJoinRequestRaw = raw
 
             val json = JSONObject(raw)
@@ -337,9 +354,22 @@ class KeeperService : Service() {
         return false
     }
 
+    // True when Roblox shouldn't be forced to the foreground right now: the
+    // user manually paused it (e.g. waiting on a Delta key page), or Firefox
+    // is the one currently on screen (the same key-page workflow), so a
+    // relaunch would yank focus away from what they're actually doing.
+    private fun isRelaunchSuppressed(): Boolean {
+        if (isManuallyPaused) return true
+        return isForegroundApp(FIREFOX_PACKAGE)
+    }
+
     private fun openDeeplink() {
         if (System.currentTimeMillis() < suppressLegacyRelaunchUntil) {
             logEvent("Skipped legacy relaunch: Main World hop in flight")
+            return
+        }
+        if (isRelaunchSuppressed()) {
+            logEvent("Skipped legacy relaunch: paused / Firefox is open")
             return
         }
         try {
