@@ -56,7 +56,6 @@ class KeeperService : Service() {
 
     private val handler = Handler(Looper.getMainLooper())
     private var lastNotForeground = false
-    private var hasBeenForeground = false
     private var botId: String = ""
     private var logcatThread: Thread? = null
     private var lastLoggedRobloxForeground: Boolean? = null
@@ -79,12 +78,10 @@ class KeeperService : Service() {
 
                     if (isRobloxForeground) {
                         lastNotForeground = false
-                        hasBeenForeground = true
                     } else {
-                        if (lastNotForeground && hasBeenForeground) {
+                        if (lastNotForeground) {
                             openDeeplink()
                             lastNotForeground = false
-                            hasBeenForeground = false
                         } else {
                             lastNotForeground = true
                         }
@@ -298,7 +295,6 @@ class KeeperService : Service() {
                         logEvent("Heartbeat stale (${minutes}m ${seconds}s) — relaunching and killing Roblox")
                         handler.post {
                             killRoblox()
-                            hasBeenForeground = false
                             lastNotForeground = false
                         }
                         handler.postDelayed({ openDeeplink() }, 2000)
@@ -307,7 +303,6 @@ class KeeperService : Service() {
                     logEvent("Heartbeat: bot ID $botId not found — relaunching")
                     handler.post {
                         killRoblox()
-                        hasBeenForeground = false
                         lastNotForeground = false
                     }
                     handler.postDelayed({ openDeeplink() }, 2000)
