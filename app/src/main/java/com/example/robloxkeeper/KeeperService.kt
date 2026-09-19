@@ -59,15 +59,23 @@ class KeeperService : Service() {
     private var hasBeenForeground = false
     private var botId: String = ""
     private var logcatThread: Thread? = null
+    private var lastLoggedRobloxForeground: Boolean? = null
+    private var lastLoggedFirefoxForeground: Boolean? = null
 
     private val timerTask = object : Runnable {
         override fun run() {
             Thread {
                 refreshBotId()
                 val isRobloxForeground = isForegroundApp(TARGET_PACKAGE)
+                val isFirefoxForeground = if (isRobloxForeground) false else isForegroundApp(FIREFOX_PACKAGE)
                 handler.post {
                     Log.d(TAG, "Is Roblox in foreground? $isRobloxForeground")
-                    logEvent("Check: robloxForeground=$isRobloxForeground")
+
+                    if (isRobloxForeground != lastLoggedRobloxForeground || isFirefoxForeground != lastLoggedFirefoxForeground) {
+                        logEvent("State: robloxForeground=$isRobloxForeground, firefoxForeground=$isFirefoxForeground")
+                        lastLoggedRobloxForeground = isRobloxForeground
+                        lastLoggedFirefoxForeground = isFirefoxForeground
+                    }
 
                     if (isRobloxForeground) {
                         lastNotForeground = false
