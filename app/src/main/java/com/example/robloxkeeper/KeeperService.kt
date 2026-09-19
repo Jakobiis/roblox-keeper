@@ -104,6 +104,7 @@ class KeeperService : Service() {
     private var lastMainJoinRequestRaw: String? = null
     @Volatile private var suppressLegacyRelaunchUntil: Long = 0L
     private val MAIN_HOP_SUPPRESSION_MS = 15000L
+    private val MAIN_JOIN_REQUEST_MAX_AGE_S = 60L
 
     private val mainJoinTask = object : Runnable {
         override fun run() {
@@ -126,6 +127,17 @@ class KeeperService : Service() {
             lastMainJoinRequestRaw = raw
 
             val json = JSONObject(raw)
+            val createdAt = json.optLong("createdAt", 0L)
+            val ageSeconds = System.currentTimeMillis() / 1000 - createdAt
+            if (createdAt <= 0L || ageSeconds > MAIN_JOIN_REQUEST_MAX_AGE_S) {
+                // Leftover from before this service was (re)started, or from
+                // a session long gone. Firing it would fight the heartbeat/
+                // crash recovery over a target that's no longer relevant —
+                // just ignore it and let normal recovery handle Roblox instead.
+                logEvent("Ignoring stale Main World hop request (${ageSeconds}s old)")
+                return
+            }
+
             val placeId = json.optLong("placeId", 606849621L)
             val jobId = if (json.isNull("jobId")) null else json.optString("jobId", "").ifBlank { null }
 
